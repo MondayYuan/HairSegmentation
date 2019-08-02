@@ -38,27 +38,65 @@ def find_corresponding_images(masks_dir, input_images_dir, input_ext='.png'):
 
         return image_tuples
 
+def generate_celeba(args):
+    image_tuples = find_corresponding_images(args.mask_dir, args.image_dir)
+
+    image_names_list = [os.path.splitext(os.path.basename(x[0]))[0] for x in image_tuples]
+
+    return image_names_list
+
+def generate_figaro(args):
+    img_path_list = []
+    mask_path_list = []
+
+    for subdir in os.listdir(args.image_dir):
+         if subdir.startswith('.'):
+             continue
+         img_path_list += [os.path.join(subdir, img)
+                                for img in os.listdir(os.path.join(args.image_dir, subdir))
+                                if not img.startswith('.')]
+         mask_path_list += [os.path.join(subdir, mask)
+                                 for mask in os.listdir(os.path.join(args.mask_dir, subdir))
+                                 if not mask.startswith('.')]
+
+    img_name_list = []
+    for img_path in img_path_list:
+        img_name = os.path.splitext(img_path)[0]
+        if img_name + '.pbm' in mask_path_list:
+            img_name_list.append(img_name)
+    return img_name_list
+
+
 if __name__ == '__main__':
     parser = ArgumentParser()
+    parser.add_argument('--dataset', required=True)
     parser.add_argument('--image-dir', required=True)
     parser.add_argument('--mask-dir', required=True)
     parser.add_argument('--output-dir', required=True)
     parser.add_argument('--split-rate', type=float, default=0.8)
+    parser.add_argument('--shuffle', action='store_true', default=False)
 
     args = parser.parse_args()
 
-    image_tuples = find_corresponding_images(args.mask_dir, args.image_dir)
+    img_name_list = []
+    if args.dataset == 'CelebA':
+        img_name_list = generate_celeba(args)
+    elif args.dataset == 'Figaro':
+        img_name_list = generate_figaro(args)
+    else:
+        print('dataset should be CelebA or Figaro')
+        raise TypeError
 
-    image_names_list = [os.path.splitext(os.path.basename(x[0]))[0] for x in image_tuples]
-    random.shuffle(image_names_list)
+    if args.shuffle:
+        random.shuffle(img_name_list)
 
-    num_train = int(args.split_rate * len(image_names_list))
+    num_train = int(args.split_rate * len(img_name_list))
 
     f_train = open(os.path.join(args.output_dir, 'train.txt'), 'w')
     f_val = open(os.path.join(args.output_dir, 'val.txt'), 'w')
     f_trainval = open(os.path.join(args.output_dir, 'trainval.txt'), 'w')
 
-    for i, img_name in enumerate(image_names_list):
+    for i, img_name in enumerate(img_name_list):
         if i < num_train:
             f_train.write(img_name + '\n')
         else:
@@ -68,6 +106,8 @@ if __name__ == '__main__':
     f_train.close()
     f_val.close()
     f_trainval.close()
+
+
 
 
 

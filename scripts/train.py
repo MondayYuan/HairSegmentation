@@ -7,9 +7,10 @@ from torch.utils.data import DataLoader
 from torch import nn
 from torch.optim import Adam
 
-from utils.dataset import CelebA
+from utils.dataset import CelebA, Figaro
 from utils.view_segmentation import overlay_segmentation_mask
 from utils.transform import UnNormalize
+from utils.dataloader import DataLoaderX
 
 import numpy as np
 import time
@@ -24,12 +25,26 @@ from tensorboardX import SummaryWriter
 def train(args, model):
     writer = SummaryWriter(comment=args.model)
 
+    if args.dataset == 'CelebA':
+        train_dataset = CelebA(args.datadir, mode='train', n_classes=args.n_classes, argument=args.argument)
+        val_dataset = CelebA(args.datadir, mode='val', n_classes=args.n_classes, argument=args.argument)
+        worker_init_fn=lambda _: np.random.seed(int(torch.initial_seed())%(2**32-1))
+        train_loader = DataLoader(train_dataset, num_workers=4, batch_size=args.batch_size, shuffle=True, worker_init_fn=worker_init_fn)
+    elif args.dataset == 'Figaro':
+        train_dataset = Figaro(args.datadir, mode='train', argument=args.argument)
+        val_dataset = Figaro(args.datadir, mode='val', argument=args.argument)
+        worker_init_fn=lambda _: np.random.seed(int(torch.initial_seed())%(2**32-1))
+        train_loader = DataLoader(train_dataset, num_workers=4, batch_size=args.batch_size, shuffle=True, worker_init_fn=worker_init_fn)
+    elif args.dataset == 'CelebA+Figaro':
+        train_dataset_celeba = CelebA('data/CelebA', mode='train', n_classes=args.n_classes, argument=args.argument)
+        train_dataset_figaro = Figaro('data/Figaro', mode='trainval', argument=args.argument)
+        val_dataset = CelebA('data/CelebA', mode='val', n_classes=args.n_classes, argument=args.argument)
+        worker_init_fn=lambda _: np.random.seed(int(torch.initial_seed())%(2**32-1))
+        train_loader = DataLoaderX(train_dataset_celeba, train_dataset_figaro, args.batch_size, worker_init_fn)
+    else:
+        print('--dataset should be CeleA or Figaro or CelebA+Figaro')
+        raise TypeError
 
-    train_dataset = CelebA(args.datadir, mode='train', argument=args.argument)
-    val_dataset = CelebA(args.datadir, mode='val', argument=args.argument)
-
-    worker_init_fn=lambda _: np.random.seed(int(torch.initial_seed())%(2**32-1))
-    train_loader = DataLoader(train_dataset, num_workers=4, batch_size=args.batch_size, shuffle=True, worker_init_fn=worker_init_fn)
 
     device = torch.device("cuda" if args.gpu else "cpu")
 
@@ -77,7 +92,7 @@ def train(args, model):
             writer.add_scalar('/val/mean_iu', mean_iu, i_epoch)
             writer.add_scalar('/val/fwavacc', fwavacc, i_epoch)
 
-            img, label, img_name = val_dataset[0]
+            img, label, img_name = val_dataset[2]
             # img, label, img_name = train_dataset[0]
 
             writer.add_text('val_img_name', img_name, i_epoch)
@@ -149,6 +164,6 @@ def evaluate(args, model, val_set):
         fwavacc = (freq[freq > 0] * iu[freq > 0]).sum()
         return acc, acc_cls, mean_iu, fwavacc
 
-    acc, acc_cls, mean_iu, fwavacc = label_accuracy_score(labels_truth, labels_predict, 3)
+    acc, acc_cls, mean_iu, fwavacc = label_accuracy_score(labels_truth, labels_predict, args.n_classes)
 
     return acc, acc_cls, mean_iu, fwavacc

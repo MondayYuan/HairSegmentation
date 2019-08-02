@@ -23,8 +23,8 @@ def face_detect(detector, frame, mode='dlib'):
             # cv2.rectangle(frame, (box.left(), box.top()), (box.right(), box.bottom()), (255, 0, 0))
 
             w, h = box.right() - box.left(), box.bottom() - box.top()
-            nl = max(0, box.left() - w // 3)
-            nr = min(frame.shape[1], box.right() + w // 3)
+            nl = max(0, box.left() - w // 2)
+            nr = min(frame.shape[1], box.right() + w // 2)
             nt = max(0, box.top() - h )
             nb = min(frame.shape[0], box.bottom() + h // 5)
 
@@ -53,4 +53,8 @@ def face_detect(detector, frame, mode='dlib'):
             return frame[nt:nb, nl:nr, :], (nl, nr, nt, nb)
         else:
             return frame.copy(), None
+
+    else:
+        return frame.copy(), None
+
 

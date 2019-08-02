@@ -16,7 +16,7 @@ def overlay_mask_with_color(img, seg_mask, color):
     return display_image
 
 
-def overlay_segmentation(img, mask):
+def overlay_segmentation(img, mask, show_skin=False):
     """ Overlays the hair-face segmentation over the input image
     :param img: input bgr-image containing the color image
     :param mask: input greyscale image containing the segmentation mask
@@ -25,13 +25,19 @@ def overlay_segmentation(img, mask):
                 2 - hair pixel)
     :return: a "pretty" view of the segmentation (the segmentation mask: mask is super-imposed over the input image: img)
     """
-    hair_mask = np.zeros(mask.shape, dtype=np.uint8)
-    hair_mask[mask == 2] = 255
-    segmentation_color = overlay_mask_with_color(img, hair_mask, hair_color)
+    if show_skin:
+        hair_mask = np.zeros(mask.shape, dtype=np.uint8)
+        hair_mask[mask == 2] = 255
+        segmentation_color = overlay_mask_with_color(img, hair_mask, hair_color)
 
-    skin_mask = np.zeros(mask.shape, dtype=np.uint8)
-    skin_mask[mask == 1] = 255
-    segmentation_color = overlay_mask_with_color(segmentation_color, skin_mask, face_color)
+
+        skin_mask = np.zeros(mask.shape, dtype=np.uint8)
+        skin_mask[mask == 1] = 255
+        segmentation_color = overlay_mask_with_color(segmentation_color, skin_mask, face_color)
+    else:
+        hair_mask = np.zeros(mask.shape, dtype=np.uint8)
+        hair_mask[mask == 1] = 255
+        segmentation_color = overlay_mask_with_color(img, hair_mask, hair_color)
 
     return segmentation_color
 

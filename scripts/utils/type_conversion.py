@@ -33,3 +33,16 @@ def skimage2PIL(img):
 
 def PIL2skimage(img):
     return opencv2skimage(PIL2opencv(img))
+
+def Index2Gray(mask, n_class=2):
+    if n_class == 2:
+        return  mask * 255
+    else:
+        return mask * 127 + 1
+
+def Gray2Index(mask, n_class=2):
+    if n_class == 2:
+        return mask // 255
+    else:
+        return mask // 127
+
