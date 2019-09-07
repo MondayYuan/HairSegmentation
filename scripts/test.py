@@ -1,10 +1,8 @@
 import cv2
 import torch
 from PIL import Image
-from utils.face_detector import FaceDetectorFaceboxes
 from utils.segmenter import Segmenter
 from utils.type_conversion import *
-import dlib
 
 def resize(img, short_size):
     w, h = img.size
@@ -16,14 +14,19 @@ def resize(img, short_size):
     return img.resize((nh, nw))
 
 def test_image(args, model):
+    if args.detector == 'dlib':
+        import dlib
+    elif args.detector == 'faceboxes':
+        from utils.face_detector import FaceDetectorFaceboxes
+
     model.eval()
 
     device = torch.device("cuda" if args.gpu else "cpu")
 
     image = Image.open(args.image).convert('RGB')
 
-    if args.resize:
-        image = resize(image, 200)
+    if args.resize > 0:
+        image = resize(image, args.resize)
 
     detector = None
     if args.detector == 'dlib':
@@ -40,8 +43,9 @@ def test_image(args, model):
     if args.save:
         result.save(args.save)
 
-    result.show()
-    image.show()
+    if not args.unshow:
+        result.show()
+        image.show()
 
 def test_video(args, model):
     if args.video == '0':
@@ -52,11 +56,16 @@ def test_video(args, model):
     w_win = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h_win = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    short_size = 300
-    if w_win > h_win:
-        nw, nh = short_size, int(w_win * short_size / h_win)
+    print(w_win, h_win)
+
+    if args.resize > 0:
+        short_size = args.resize
+        if w_win > h_win:
+            nw, nh = short_size, int(w_win * short_size / h_win)
+        else:
+            nw, nh = int(h_win * short_size / w_win), short_size
     else:
-        nw, nh = int(h_win * short_size / w_win), short_size
+        nw, nh = w_win, h_win
 
     detector = None
     if args.detector == 'dlib':
@@ -86,7 +95,8 @@ def test_video(args, model):
             out.write(result)
 
 
-        cv2.imshow('image', result)
+        if not args.unshow:
+            cv2.imshow('image', result)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break

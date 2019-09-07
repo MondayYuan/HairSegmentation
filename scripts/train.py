@@ -7,44 +7,44 @@ from torch.utils.data import DataLoader
 from torch import nn
 from torch.optim import Adam
 
-from utils.dataset import CelebA, Figaro
+from utils.dataset import CelebA, Figaro, OurDataset, CelebAMaskHQ, SpringFace, SpringHair
 from utils.view_segmentation import overlay_segmentation_mask
 from utils.transform import UnNormalize
-from utils.dataloader import DataLoaderX
+from utils.loss import FocalLoss
 
 import numpy as np
 import time
-import os
-import cv2
-
-from PIL import Image
-from torchvision.transforms import ToPILImage
 
 from tensorboardX import SummaryWriter
 
 def train(args, model):
     writer = SummaryWriter(comment=args.model)
 
+    crop_size = None
+    if args.crop_size:
+        crop_size = args.crop_size.split('x')
+        crop_size = tuple([int(x) for x in crop_size])
     if args.dataset == 'CelebA':
-        train_dataset = CelebA(args.datadir, mode='train', n_classes=args.n_classes, argument=args.argument)
-        val_dataset = CelebA(args.datadir, mode='val', n_classes=args.n_classes, argument=args.argument)
-        worker_init_fn=lambda _: np.random.seed(int(torch.initial_seed())%(2**32-1))
-        train_loader = DataLoader(train_dataset, num_workers=4, batch_size=args.batch_size, shuffle=True, worker_init_fn=worker_init_fn)
+        dataset = CelebA(args.datadir, resize=args.resize, argument=args.argument)
     elif args.dataset == 'Figaro':
-        train_dataset = Figaro(args.datadir, mode='train', argument=args.argument)
-        val_dataset = Figaro(args.datadir, mode='val', argument=args.argument)
-        worker_init_fn=lambda _: np.random.seed(int(torch.initial_seed())%(2**32-1))
-        train_loader = DataLoader(train_dataset, num_workers=4, batch_size=args.batch_size, shuffle=True, worker_init_fn=worker_init_fn)
-    elif args.dataset == 'CelebA+Figaro':
-        train_dataset_celeba = CelebA('data/CelebA', mode='train', n_classes=args.n_classes, argument=args.argument)
-        train_dataset_figaro = Figaro('data/Figaro', mode='trainval', argument=args.argument)
-        val_dataset = CelebA('data/CelebA', mode='val', n_classes=args.n_classes, argument=args.argument)
-        worker_init_fn=lambda _: np.random.seed(int(torch.initial_seed())%(2**32-1))
-        train_loader = DataLoaderX(train_dataset_celeba, train_dataset_figaro, args.batch_size, worker_init_fn)
+        dataset = Figaro(args.datadir, resize=args.resize, crop_size=crop_size, argument=args.argument)
+    elif args.dataset == 'Our':
+        dataset = OurDataset(args.datadir, resize=args.resize, argument=args.argument)
+    elif args.dataset == 'CelebAMaskHQ':
+        dataset = CelebAMaskHQ(args.datadir, resize=args.resize, argument=args.argument)
+    elif args.dataset == 'SpringFace':
+        dataset = SpringFace(args.datadir, resize=args.resize, argument=args.argument)
+    elif args.dataset == 'SpringHair':
+        dataset = SpringHair(args.datadir, resize=args.resize, crop_size=crop_size, argument=args.argument)
     else:
-        print('--dataset should be CeleA or Figaro or CelebA+Figaro')
-        raise TypeError
+        print('Fail to find the dataset')
+        raise ValueError
 
+    num_train = int(args.train_val_rate * len(dataset))
+    num_val = len(dataset) - num_train
+    train_dataset, val_dataset = random_split(dataset, [num_train, num_val])
+    worker_init_fn=lambda _: np.random.seed(int(torch.initial_seed())%(2**32-1))
+    train_loader = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=args.batch_size, shuffle=True, worker_init_fn=worker_init_fn)
 
     device = torch.device("cuda" if args.gpu else "cpu")
 
@@ -52,15 +52,20 @@ def train(args, model):
 
     model.train()
 
-    criterion = nn.CrossEntropyLoss().to(device)
-
-    # if args.model == 'fastDeepMatting':
-    #     optimizer = Adam(model.parameters(), 5)
     if args.model == 'unet':
-        optimizer = Adam(model.parameters(), lr=args.lr)
+        criterion = nn.CrossEntropyLoss().to(device)
+    elif args.model == 'denseunet':
+        # criterion = nn.CrossEntropyLoss().to(device)
+        criterion = FocalLoss(gamma=2).to(device)
+    else:
+        print('Fail to find the net')
+        raise ValueError
+
+    optimizer = Adam(model.parameters(), lr=args.lr)
 
     max_mean_iu = -999
 
+    n_steps = 0
     for i_epoch in range(args.num_epochs):
         model.train()
 
@@ -70,7 +75,7 @@ def train(args, model):
             targets = labels.to(device)
             # print('input', inputs.shape)
             # print('target', targets.shape)
-            outputs = model(inputs)
+            outputs = model(inputs).squeeze(1)
             # print('output', outputs.shape)
 
             optimizer.zero_grad()
@@ -78,46 +83,44 @@ def train(args, model):
             loss = criterion(outputs, targets)
             loss.backward()
 
-            writer.add_scalar('/train/loss', loss.item(), i_epoch)
+            writer.add_scalar('/train/loss', loss, n_steps)
 
             optimizer.step()
+            n_steps += 1
 
-        if i_epoch % args.epochs_eval == 0:
-            acc, acc_cls, mean_iu, fwavacc = evaluate(args, model, val_dataset)
-            time_stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            print('epoch ={}, loss = {}, macc = {}, mean_iu = {} ---{}'.format(i_epoch, loss.item(), acc_cls, mean_iu, time_stamp))
+            if n_steps % args.iters_eval == 0 or \
+                    (i_epoch == args.num_epochs - 1 and step == len(train_loader) - 1):
+                result = evaluate_segment(args, model, val_dataset)
+                time_stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                print(f'epoch = {i_epoch}, iter = {n_steps},  train_loss = {loss} ---{time_stamp}')
+                print(result)
 
-            writer.add_scalar('/val/acc', acc, i_epoch)
-            writer.add_scalar('/val/acc_cls', acc_cls, i_epoch)
-            writer.add_scalar('/val/mean_iu', mean_iu, i_epoch)
-            writer.add_scalar('/val/fwavacc', fwavacc, i_epoch)
+                for key in result.keys():
+                    writer.add_scalar(f'/val/{key}', result[key], i_epoch)
 
-            img, label, img_name = val_dataset[2]
-            # img, label, img_name = train_dataset[0]
+                for i in range(6):
+                    img, label, img_name = val_dataset[i]
+                    writer.add_text('val_img_name', img_name, i_epoch)
 
-            writer.add_text('val_img_name', img_name, i_epoch)
+                    output = model(img.unsqueeze(0).to(device))
+                    mask = torch.argmax(output, 1)
 
-            output = model(img.unsqueeze(0).to(device))
-            mask = torch.argmax(output, 1)
+                    img = UnNormalize(mean=[.485, .456, .406], std=[.229, .224, .225])(img)
+                    img_masked = overlay_segmentation_mask(img, mask, inmode='tensor', outmode='tensor')
 
-            img = UnNormalize(mean=[.485, .456, .406], std=[.229, .224, .225])(img)
-            img_masked = overlay_segmentation_mask(img, mask, inmode='tensor', outmode='tensor')
+                    mask = mask * 127
+                    label = label * 127
 
-            mask = mask * 127 + 1
-            label = label * 127 + 1
+                    writer.add_image(f'/val/image/{img_name}', img, n_steps)
+                    writer.add_image(f'/val/label/{img_name}', label.unsqueeze(0), n_steps)
+                    writer.add_image(f'/val/image_masked/{img_name}', img_masked, n_steps)
+                    writer.add_image(f'/val/mask/{img_name}', mask, n_steps)
 
-            writer.add_image('/val/image', img, i_epoch)
-            writer.add_image('/val/label', label.unsqueeze(0), i_epoch)
-            writer.add_image('/val/image_masked', img_masked, i_epoch)
-            writer.add_image('/val/mask', mask, i_epoch)
+                if result['mean_iu'] > max_mean_iu:
+                    max_mean_iu = result['mean_iu']
+                    torch.save(model.state_dict(), args.save_path)
 
-            if mean_iu > max_mean_iu:
-                max_mean_iu = mean_iu
-                filename = os.path.join(args.save_dir, f'{args.model}.pth')
-                torch.save(model.state_dict(), filename)
-
-
-def evaluate(args, model, val_set):
+def evaluate_segment(args, model, val_set):
     model.eval()
     device = torch.device("cuda" if args.gpu else "cpu")
     val_loader = DataLoader(val_set,
@@ -164,6 +167,11 @@ def evaluate(args, model, val_set):
         fwavacc = (freq[freq > 0] * iu[freq > 0]).sum()
         return acc, acc_cls, mean_iu, fwavacc
 
-    acc, acc_cls, mean_iu, fwavacc = label_accuracy_score(labels_truth, labels_predict, args.n_classes)
+    acc, acc_cls, mean_iu, fwavacc = label_accuracy_score(labels_truth, labels_predict, 2)
 
-    return acc, acc_cls, mean_iu, fwavacc
+    return {
+        'acc': acc,
+        'acc_cls': acc_cls,
+        'mean_iu': mean_iu,
+        'fwavacc': fwavacc
+    }
